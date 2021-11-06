@@ -4,16 +4,7 @@
 
 ## Basic Description
 
-This repo contains an implementation of CHAP (**C**orrelated pat**H**w**A**y-grou**P**) package which consists of three
-hierarchical Bayesian (parametric) mixture models, CTM (**C**orrelated **T**opic **M**odel), SOAP (**S**parse c**O**
-rrelated p**A**thway grou**P**) and SPREAT (di**S**tributed s**P**arse cor**RE**lated p**AT**hway group), that
-incorporate pathway abundance information to encode each example as a mixture distribution of groups, and each group, in
-turn, is a mixture of pathways with different mixing proportions. SOAP and SPREAT incorporate supplementary pathway (
-with different proportions) on top of the pathways provided in pathway datasets to partially resolve noisy pathway data.
-Moreover, SOAP and SPREAT induce dual sparseness, where we allow an example to select only a few groups and also each group
-to select its optimum set of pathways. While these models were proposed to model pathways among organims, they can be
-used for other types of datasets (e.g. natural language processing). We also included LDA (**L**atent **D**irichlet **
-A**llocation) which is implemented in [scikit-learn](https://scikit-learn.org/stable/).
+This repo contains an implementation of CHAP (**C**orrelated pat**H**w**A**y-grou**P**) package which consists of three hierarchical Bayesian (parametric) mixture models, CTM (**C**orrelated **T**opic **M**odel), SOAP (**S**parse c**O**rrelated p**A**thway grou**P**) and SPREAT (di**S**tributed s**P**arse cor**RE**lated p**AT**hway group), that incorporate pathway abundance information to encode each example as a mixture distribution of groups, and each group, in turn, is a mixture of pathways with different mixing proportions. SOAP and SPREAT incorporate supplementary pathway (with different proportions) on top of the pathways provided in pathway datasets to partially resolve noisy pathway data. Moreover, SOAP and SPREAT induce dual sparseness, where we allow an example to select only a few groups and also each group to select its optimum set of pathways. While these models were proposed to model pathways among organims, they can be used for other types of datasets (e.g. natural language processing). We also included LDA (**L**atent **D**irichlet **A**llocation) which is implemented in [scikit-learn](https://scikit-learn.org/stable/).
 
 ## Dependencies
 
@@ -36,7 +27,7 @@ downloaded the `cbt_materials.zip` file, unzip it and make sure you obtain the t
 depicted below:
 
 ```
-cbt_materials/
+chap_materials/
 	├── model/
         │       ├── ctm.pkl and ctm_[exp_omega | mu | sigma].npz
         │       ├── soap.pkl and soap_[exp_phi | mu | sigma].npz
