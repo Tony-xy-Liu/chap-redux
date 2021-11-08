@@ -181,8 +181,8 @@ To transform a text dataset (e.g. "pnas_Xtest.pkl") using pretrained models of S
 
 If you find *CHAP* useful in your research, please consider citing the following paper:
 
-- M. A. Basher, Abdur Rahman. **["Modeling Metabolic Pathways as Groups (with Augmentation)."](https://arbasher.github.io/data/cbt.pdf)**, arXiv (2019).
+- M. A. Basher, Abdur Rahman and Hallam, Steven J.. **["Aggregating statistically correlated metabolic pathways into groups to improve pathway prediction outcomes."](https://arbasher.github.io/data/chap.pdf)**, arXiv (2022).
 
 ## Contact
 
-For any inquiries, please contact: [arbasher@student.ubc.ca](mailto:arbasher@student.ubc.ca)
+For any inquiries, please contact Steven Hallam and Abdurrahman Abul-Basher at: [shallam@mail.ubc.ca](mailto:shallam@mail.ubc.ca) and [arbasher@student.ubc.ca](mailto:arbasher@student.ubc.ca)
