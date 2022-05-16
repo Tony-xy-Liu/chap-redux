@@ -1,3 +1,9 @@
+## @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+## 
+## this is now a legacy file for archival purposes only!
+## 
+## @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
 __author__ = "Abdurrahman Abul-Basher"
 __date__ = '16/09/2019'
 __copyright__ = "Copyright 2019, The Hallam Lab"
@@ -15,10 +21,10 @@ import sys
 import textwrap
 from argparse import ArgumentParser
 
-import utility.file_path as fph
-from train import train
-from utility.arguments import Arguments
-
+from .utility import file_path as fph
+from .__train import train
+from .utility.arguments import Arguments
+from .model import *
 
 def __print_header():
     if sys.platform.startswith('win'):

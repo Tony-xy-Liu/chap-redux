@@ -16,7 +16,7 @@ from scipy.sparse import csr_matrix
 from scipy.special import psi, gammaln, logsumexp
 from sklearn.utils import check_array
 from sklearn.utils.validation import check_non_negative
-from utility.access_file import save_data
+from ..utility.access_file import save_data
 
 logger = logging.getLogger(__name__)
 EPSILON = np.finfo(np.float).eps

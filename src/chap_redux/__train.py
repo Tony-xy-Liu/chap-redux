@@ -1,3 +1,9 @@
+## @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+## 
+## this is now a legacy file for archival purposes only!
+## 
+## @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
 '''
 This file is the main entry used to train, evaluate, and transform 
 the dataset using various hierarchal Bayesian mixture models.
@@ -12,10 +18,10 @@ import numpy as np
 from gensim.models.coherencemodel import CoherenceModel
 from sklearn.decomposition import LatentDirichletAllocation as skLDA
 
-from model.ctm import CorrelatedTopicModel as CTM
-from model.soap import SparseCorrelatedBagPathway as SOAP
-from model.spreat import diSparseCorrelatedBagPathway as SPREAT
-from utility.access_file import save_data, load_data
+from .model.ctm import CorrelatedTopicModel as CTM
+from .model.soap import SparseCorrelatedBagPathway as SOAP
+from .model.spreat import diSparseCorrelatedBagPathway as SPREAT
+from .utility.access_file import save_data, load_data
 
 
 ###***************************        Private Main Entry        ***************************###
@@ -51,6 +57,25 @@ def __train(arg):
             print('\n{0})- Training using SOAP model...'.format(steps))
             steps = steps + 1
             model_name = 'soap_' + arg.model_name
+
+            # def peek(*args, **kwargs):
+            #     print(kwargs)
+            # peek(vocab=dictionary.token2id, num_components=arg.num_components,
+            #              alpha_mu=arg.alpha_mu, alpha_sigma=arg.alpha_sigma,
+            #              alpha_phi=arg.alpha_phi, gamma=arg.gamma, kappa=arg.kappa,
+            #              xi=arg.xi, varpi=arg.varpi, optimization_method=arg.opt_method,
+            #              cost_threshold=arg.cost_threshold, component_threshold=arg.component_threshold,
+            #              max_sampling=arg.max_sampling, subsample_input_size=arg.subsample_input_size,
+            #              batch=arg.batch, num_epochs=arg.num_epochs,
+            #              max_inner_iter=arg.max_inner_iter, top_k=arg.top_k, collapse2ctm=arg.collapse2ctm,
+            #              use_features=arg.use_features, num_jobs=arg.num_jobs,
+            #              display_interval=arg.display_interval, shuffle=arg.shuffle,
+            #              forgetting_rate=arg.forgetting_rate, delay_factor=arg.delay_factor,
+            #              random_state=arg.random_state, log_path=arg.logpath)
+            # peek(X=X, M=M, features=features, model_name=model_name, model_path=arg.mdpath,
+            #           result_path=arg.rspath, display_params=display_params)
+            # exit()
+
             model = SOAP(vocab=dictionary.token2id, num_components=arg.num_components,
                          alpha_mu=arg.alpha_mu, alpha_sigma=arg.alpha_sigma,
                          alpha_phi=arg.alpha_phi, gamma=arg.gamma, kappa=arg.kappa,
@@ -331,6 +356,13 @@ def __train(arg):
             print('\t>> Loading SOAP model...')
             model = load_data(
                 file_name=model_name, load_path=arg.mdpath, tag='SOAP model', print_tag=False)
+            def peek(*args, **kwargs):
+                print(kwargs)
+            peek(X=X, M=M, features=features,
+                                batch_size=arg.batch, num_jobs=arg.num_jobs)
+            exit()
+
+
             X = model.transform(X=X, M=M, features=features,
                                 batch_size=arg.batch, num_jobs=arg.num_jobs)
             save_data(data=X, file_name=file_name, save_path=arg.dspath,

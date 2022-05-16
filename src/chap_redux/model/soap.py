@@ -1,5 +1,5 @@
 """
-Variational Bayes for Distributed Sparse Correlated Pathway Group Model
+Variational Bayes for Sparse Correlated Pathway Group Model
 """
 
 import copy
@@ -16,7 +16,7 @@ from scipy.sparse import csr_matrix
 from scipy.special import psi, gammaln, logsumexp, beta
 from sklearn.utils import check_array
 from sklearn.utils.validation import check_non_negative
-from utility.access_file import save_data
+from ..utility.access_file import save_data
 
 logger = logging.getLogger(__name__)
 EPSILON = np.finfo(np.float).eps
@@ -26,14 +26,14 @@ np.random.seed(12345)
 np.seterr(divide='ignore', invalid='ignore')
 
 
-class diSparseCorrelatedBagPathway:
+class SparseCorrelatedBagPathway:
     def __init__(self, vocab, num_components, alpha_mu, alpha_sigma, alpha_phi, gamma=2, kappa=3, xi=0, varpi=1,
                  optimization_method="Newton-CG", cost_threshold=0.001, component_threshold=0.0001, forgetting_rate=0.9,
                  delay_factor=1.0, max_sampling=5, max_inner_iter=10, top_k=100, collapse2ctm=False, use_features=False,
                  subsample_input_size=0.1, batch=10, num_epochs=5, num_jobs=1, display_interval=2, shuffle=True,
                  random_state=12345, log_path='../../log', verbose=0):
-        """Distributed Sparse Correlated Bag Pathway model"""
-        logging.basicConfig(filename=os.path.join(log_path, 'SPREAT_events'), level=logging.DEBUG)
+        """Sparse Correlated Bag Pathway model"""
+        logging.basicConfig(filename=os.path.join(log_path, 'SOAP_events'), level=logging.DEBUG)
         self.vocab = vocab
         self.num_features = len(self.vocab)
         self.num_components = num_components
@@ -81,7 +81,7 @@ class diSparseCorrelatedBagPathway:
         argdict.update({'varpi': 'The parameter controlling component feature distribution: {0}'.format(self.varpi)})
         argdict.update({'optimization_method': 'Optimization algorithm used? {0}'.format(self.optimization_method)})
         argdict.update({'cost_threshold': 'Perplexity tolerance: {0}'.format(self.cost_threshold)})
-        argdict.update({'max_sampling': 'Maximum number of random samplings.: {0}'.format(self.max_sampling)})
+        argdict.update({'max_sampling': 'Maximum number of random samplings: {0}'.format(self.max_sampling)})
         argdict.update({'collapse2ctm': 'Collapse estimation to CTM model? {0}'.format(self.collapse2ctm)})
         argdict.update({'use_features': 'Employ external component features? {0}'.format(self.use_features)})
         argdict.update({'forgetting_rate': 'Forgetting rate to control how quickly old '
@@ -193,20 +193,24 @@ class diSparseCorrelatedBagPathway:
         if not self.collapse2ctm:
             if M is not None:
                 assert M.shape == X.shape
+                omega = M + self.xi_vec
             else:
-                M = np.zeros((X.shape[0], self.num_features))
-            if features is not None:
-                assert X.shape[1] == features.shape[0]
-            else:
-                features = np.ones((self.num_features, 20))
-            features = features / np.linalg.norm(features, axis=1)[:, np.newaxis]
+                omega = np.zeros((X.shape[0], self.num_features)) + self.xi_vec
+            omega = omega / np.sum(omega, axis=1)[:, np.newaxis]
+        else:
+            omega = None
+        if features is not None:
+            assert X.shape[1] == features.shape[0]
+        else:
+            features = np.ones((self.num_features, 20))
+        features = features / np.linalg.norm(features, axis=1)[:, np.newaxis]
         self.batch = batch_size
         self.num_jobs = num_jobs
         if batch_size < 0:
             self.batch = 30
         if num_jobs < 0:
             self.num_jobs = 1
-        return M, features
+        return features, omega
 
     def __dirichlet_expectation(self, alpha, beta=None):
         if beta is not None:
@@ -348,7 +352,7 @@ class diSparseCorrelatedBagPathway:
         self.zeta_square = optimize_zeta_square
         return optimize_zeta_square
 
-    def __e_step(self, X, M, features, current_batch=-1, total_batches=-1, transform=False, verbose=True):
+    def __e_step(self, X, omega, features, current_batch=-1, total_batches=-1, transform=False, verbose=True):
         """E-step in EM update.
         """
         if current_batch != -1:
@@ -367,11 +371,8 @@ class diSparseCorrelatedBagPathway:
 
         # initialize two n-by-b matrices
         component_distribution = np.ones((num_samples, self.num_components))
-        omega = 0
         omega_sstats = 0
         if not self.collapse2ctm:
-            omega = np.copy(M) + self.xi_vec
-            omega = omega / np.sum(omega, axis=1)[:, np.newaxis]
             omega_sstats = np.zeros(self.num_features)
 
         # initialize empty sufficient statistics for the M-step.
@@ -393,7 +394,7 @@ class diSparseCorrelatedBagPathway:
                 P = np.dot(features[feature_idx, :], features[feature_idx, :].T)
                 P = np.mean(P, axis=0)
 
-            # compute the total number of vocab
+            # compute the total number of features
             sample_feature_count = np.sum(X[idx])
 
             # initialize nu and zeta_square for this sample
@@ -409,30 +410,25 @@ class diSparseCorrelatedBagPathway:
                 sample_lam = np.random.binomial(1, beta, size=(self.num_components))
                 # initialize omega for this sample
                 sample_omega = omega[idx, feature_idx]
+                # Get (1 - w_c)
+                norm_wc = (1 - sample_omega)
+                # sum_{c=1}^{c=t} y_{j,c} * E[log phi_{a,j}] * norm_wc
+                hold_norm = np.multiply(self.expected_log_phi[:, feature_idx], norm_wc)
             else:
                 sample_lam = np.ones(self.num_components)
+                hold_norm = self.expected_log_phi[:, feature_idx]
 
             prev_comp_distr = component_distribution[idx]
 
             for iter in np.arange(start=0, stop=self.max_inner_iter + 1):
                 # Update log_o
-                if self.collapse2ctm:
-                    hold_norm = self.expected_log_phi[:, feature_idx]
-                else:
-                    # Update (1 - w_c) / (sum_{k=1}^{k=t} 1- w_k)
-                    norm_wc = (1 - sample_omega)
-                    norm_wc = norm_wc / np.sum(1 - sample_omega)
-                    hold_norm = np.multiply(self.expected_log_phi[:, feature_idx], norm_wc)
-
-                hold_norm = np.multiply(hold_norm, sample_lam[:, np.newaxis])
+                log_o = np.multiply(hold_norm, sample_lam[:, np.newaxis])
                 if not self.collapse2ctm:
-                    hold_norm = hold_norm - 1
+                    log_o = log_o - 1
                 if self.use_features:
-                    hold_norm = np.multiply(hold_norm, P)
-
-                log_o = sample_nu[:, np.newaxis] + hold_norm + EPSILON
+                    log_o = np.multiply(log_o, P)
+                log_o = sample_nu[:, np.newaxis] + log_o + EPSILON
                 log_o = log_o - logsumexp(log_o, axis=0)
-
                 # update o
                 o = np.exp(log_o + np.log(feature_count))
 
@@ -451,56 +447,39 @@ class diSparseCorrelatedBagPathway:
                     arguments = (rho, sample_feature_count)
                     sample_zeta_square = self.__optimize_zeta_square(zeta_square=self.zeta_square,
                                                                      arguments=arguments)
-                else:
-                    sample_nu = self.mu
-                    sample_zeta_square = self.sigma
 
-                # update rho
-                rho = np.sum(np.exp(sample_nu + 0.5 * sample_zeta_square))
-
-                if not self.collapse2ctm:
-                    # collect average lambda for this sample
-                    if iter % 3 == 0:
-                        if not transform:
-                            # update
-                            vartheta_1 = self.gamma + np.mean(sample_lam, axis=0)
-                            vartheta_2 = self.kappa - np.mean(sample_lam, axis=0) + 1
-
-                        # Estimate psi(vartheta_1) - psi(vartheta_2)
-                        hold_psi_vartheta = psi(vartheta_1) - psi(vartheta_2)
-
-                        hold_lambda = np.zeros((self.max_sampling, self.num_components))
-                        temp = np.multiply(o, hold_norm)
-                        temp = np.mean(temp, axis=1)
-                        temp = temp / temp.sum(axis=0)
-                        for i in np.arange(self.max_sampling):
-                            beta = np.random.beta(vartheta_1, vartheta_2)
-                            hold_bernoulli = np.random.binomial(1, beta, size=(self.num_components))
-                            hold_lambda[i] = 1 / (1 + np.exp(-(hold_psi_vartheta + temp)))
-                            hold_lambda[i] = np.random.binomial(1, hold_lambda[i], size=(self.num_components))
-                            hold_lambda[i] = hold_lambda[i] * hold_bernoulli
-                        sample_lam = np.mean(hold_lambda, axis=0)
-                        sample_lam[sample_lam >= 0.5] = 1.
-                        sample_lam[sample_lam < 0.5] = EPSILON
-
-                        # Update sample_omega
-                        # Update (1 - w_c - (sum_{k=1}^{k=t} 1- w_k)) / (sum_{k=1}^{k=t} 1- w_k)**2
-                        norm_wc = (1 - sample_omega - np.sum(1 - sample_omega))
-                        norm_wc = norm_wc / np.sum(1 - sample_omega) ** 2
-                        temp = np.multiply(o, sample_lam[:, np.newaxis])
-                        temp = np.multiply(temp, self.expected_log_phi[:, feature_idx])
-                        sum_o_norm = np.sum(np.multiply(temp, norm_wc), axis=0)
-                        sample_omega = omega[idx, feature_idx]
-                        sample_omega = sample_omega - np.multiply(sum_o_norm, norm_wc)
-                        sample_omega = np.array(sample_omega.flat)
-                        sample_omega[sample_omega < 0] = EPSILON
-                        sample_omega = sample_omega / np.sum(sample_omega)
+                    # update rho
+                    rho = np.sum(np.exp(sample_nu + 0.5 * sample_zeta_square))
 
                 # If curr_cmp_distr hasn't changed much, we're done.
                 curr_cmp_distr = (sum_o + EPSILON) / np.sum(sum_o + EPSILON)
                 meanchange = np.mean(np.abs(curr_cmp_distr, prev_comp_distr))
                 if meanchange < self.component_threshold:
                     break
+
+            if not self.collapse2ctm:
+                # collect average lambda for this sample
+                if not transform:
+                    # update
+                    vartheta_1 = self.gamma + np.mean(sample_lam, axis=0)
+                    vartheta_2 = self.kappa - np.mean(sample_lam, axis=0) + 1
+                # Estimate psi(vartheta_1) - psi(vartheta_2)
+                hold_psi_vartheta = psi(self.gamma) - psi(self.kappa)
+                hold_lambda = np.zeros((self.max_sampling, self.num_components))
+                temp = np.multiply(o, hold_norm)
+                temp = np.mean(temp, axis=1)
+                temp = temp / temp.sum(axis=0)
+                for i in np.arange(self.max_sampling):
+                    beta = np.random.beta(vartheta_1, vartheta_2)
+                    hold_bernoulli = np.random.binomial(1, beta, size=(self.num_components))
+                    hold_lambda[i] = 1 / (1 + np.exp(-(hold_psi_vartheta + temp)))
+                    hold_lambda[i] = np.random.binomial(1, hold_lambda[i], size=(self.num_components))
+                    hold_lambda[i] = hold_lambda[i] * hold_bernoulli
+                sample_lam = np.mean(hold_lambda, axis=0)
+                sample_lam[sample_lam >= 0.5] = 1.
+                sample_lam[sample_lam < 0.5] = EPSILON
+                component_distribution[idx, :] = np.multiply(component_distribution[idx], sample_lam)
+                log_o = np.multiply(log_o, sample_lam[:, np.newaxis])
 
             # Contribution of an example i to the expected sufficient
             # statistics for the M step.
@@ -515,14 +494,11 @@ class diSparseCorrelatedBagPathway:
             lambda_sstats = lambda_sstats / (lambda_sstats.sum(axis=0) + EPSILON)
             if not self.collapse2ctm:
                 omega_sstats[feature_idx] += sample_omega
-                omega[idx, feature_idx] = sample_omega
             temp = np.exp(log_o + np.log(feature_count))
             temp = temp / temp.sum(axis=0)
             temp = self.__check_bounds(X=temp)
             o_sstats[:, feature_idx] += temp
             # compute the normalized components weights across samples
-            if not self.collapse2ctm:
-                component_distribution[idx, :] = np.multiply(component_distribution[idx], sample_lam)
             component_distribution[idx, :] = (sum_o + EPSILON) / np.sum(sum_o + EPSILON)
         if not self.collapse2ctm:
             if self.top_k > 0:
@@ -541,16 +517,16 @@ class diSparseCorrelatedBagPathway:
 
         return sufficient_stats, component_distribution
 
-    def __batch_e_step(self, X, M, features, list_batches, transform=False, verbose=True):
+    def __batch_e_step(self, X, omega, features, list_batches, transform=False, verbose=True):
         parallel = Parallel(n_jobs=self.num_jobs, prefer="threads", verbose=max(0, self.verbose - 1))
         if not self.collapse2ctm:
             results = parallel(delayed(self.__e_step)(X[batch:batch + self.batch],
-                                                      M[batch:batch + self.batch],
+                                                      omega[batch:batch + self.batch],
                                                       features, idx, len(list_batches),
                                                       transform, verbose)
                                for idx, batch in enumerate(list_batches))
         else:
-            results = parallel(delayed(self.__e_step)(X[batch:batch + self.batch], M,
+            results = parallel(delayed(self.__e_step)(X[batch:batch + self.batch], omega,
                                                       features, idx, len(list_batches),
                                                       transform, verbose)
                                for idx, batch in enumerate(list_batches))
@@ -583,7 +559,7 @@ class diSparseCorrelatedBagPathway:
 
         return sufficient_stats, component_distribution
 
-    def __m_step(self, sstats, num_samples, learning_rate):
+    def __m_step(self, sstats, learning_rate, num_samples):
         """
         Optimize model's parameters using the statictics collected during the e-step
         :param num_samples: 
@@ -611,13 +587,13 @@ class diSparseCorrelatedBagPathway:
         self.sigma = self.__check_bounds(X=self.sigma)
         self.sigma_inv = np.linalg.pinv(self.sigma)
 
-        # update rho
-        sum_rho = np.sum(np.exp(self.nu + 0.5 * self.zeta_square))
-        self.rho = (1 - learning_rate) * self.rho + sum_rho * learning_rate
-
         # update nu and zeta square
         self.nu = (1 - learning_rate) * self.nu + self.mu * learning_rate
         self.zeta_square = (1 - learning_rate) * self.zeta_square + np.diag(self.sigma) * learning_rate
+
+        # update rho
+        sum_rho = np.sum(np.exp(self.nu + 0.5 * self.zeta_square))
+        self.rho = (1 - learning_rate) * self.rho + sum_rho * learning_rate
 
         # update vartheta_1 and vartheta_2
         curr_vartheta = np.mean((self.gamma * self.num_components + mean_lam) / self.num_components)
@@ -625,7 +601,8 @@ class diSparseCorrelatedBagPathway:
         curr_vartheta = np.mean((self.kappa * self.num_components - mean_lam + 1) / self.num_components)
         self.vartheta_2 = (1 - learning_rate) * self.vartheta_2 + curr_vartheta * learning_rate
 
-    def __elbo(self, num_samples, num_features, M, omega_sstats, lambda_sstats, o_sstats):
+    def __elbo(self, num_samples, num_features, omega_sstats, lambda_sstats, o_sstats):
+
         score = 0.0
 
         # add smoothing term
@@ -644,7 +621,7 @@ class diSparseCorrelatedBagPathway:
         score -= np.sum(gammaln(np.sum(self.phi, axis=1))) + np.sum(gammaln(self.phi))
         score -= np.sum(np.multiply((self.phi - 1), self.expected_log_phi))
 
-        # E[log p(eta | mu, Sigma)] - E[log q(eta | lambda, nu_square)]
+        # E[log p(eta | mu, Sigma)] + E[log q(eta | lambda, nu_square)]
         det = np.linalg.slogdet(self.sigma_inv + EPSILON)
         score += 0.5 * det[0] * det[1]
         score -= 0.5 * self.num_components * np.log(2 * np.pi)
@@ -671,14 +648,6 @@ class diSparseCorrelatedBagPathway:
             temp -= np.log(beta(self.vartheta_1, self.vartheta_2))
             score -= np.sum(temp) * self.num_components * num_samples
 
-            # E[log p(Omega | M, xi)] - E[log q(Omega | omega)]
-            ## TODO: uncomment if necessary
-            # expected_log_omega = self.__dirichlet_expectation(omega_sstats)
-            # score += (np.sum(gammaln(np.sum(self.xi_vec + M, axis=1))) - np.sum(gammaln(self.xi_vec + M)))
-            # score += np.sum(np.multiply((self.xi_vec + M - 1), expected_log_omega))
-            # score -= (gammaln(np.sum(omega_sstats)) - np.sum(gammaln(omega_sstats)))
-            # score -= np.sum(np.multiply((omega_sstats - 1), expected_log_omega))
-
         # E[log p(z | eta)] - E[log q(z | o)]
         score += ((1 - np.log(self.rho + EPSILON)) * num_features)
         score += np.sum(np.dot(self.nu, o_sstats))
@@ -697,20 +666,15 @@ class diSparseCorrelatedBagPathway:
 
         return float(score)
 
-    def fit(self, X, M=None, features=None, model_name='soap', model_path="../../model", result_path=".",
+    def fit(self, X, M=None, features=None, model_name='cbt', model_path="../../model", result_path=".",
             display_params: bool = True):
-        # validate inputs
+
         if X is None:
             raise Exception("Please provide a dataset.")
         assert X.shape[1] == self.num_features
-        X = self.__check_non_neg_array(X, "diSparseCorrelatedBagPathway.fit")
+        X = self.__check_non_neg_array(X, "SparseCorrelatedBagPathway.fit")
 
         if not self.collapse2ctm:
-            if M is not None:
-                assert M.shape == X.shape
-            else:
-                M = np.zeros((X.shape[0], self.num_features))
-
             if features is not None:
                 assert X.shape[1] == features.shape[0]
             else:
@@ -726,11 +690,19 @@ class diSparseCorrelatedBagPathway:
             self.__print_arguments()
             time.sleep(2)
 
+        if not self.collapse2ctm:
+            if M is not None:
+                assert M.shape == X.shape
+                omega = M + self.xi_vec
+            else:
+                omega = np.zeros((X.shape[0], self.num_features)) + self.xi_vec
+            omega = omega / np.sum(omega, axis=1)[:, np.newaxis]
+
         cost_file_name = model_name + "_cost.txt"
         save_data('', file_name=cost_file_name, save_path=result_path, mode='w', w_string=True, print_tag=False)
 
-        print('\t>> Training by SPREAT model...')
-        logger.info('\t>> Training by SPREAT model...')
+        print('\t>> Training by SOAP model...')
+        logger.info('\t>> Training by SOAP model...')
         n_epochs = self.num_epochs + 1
         old_bound = np.inf
 
@@ -749,14 +721,15 @@ class diSparseCorrelatedBagPathway:
 
             # E-step
             if not self.collapse2ctm:
-                sstats, tmp = self.__batch_e_step(X=X[idx, :], M=M[idx, :], features=features,
+                sstats, tmp = self.__batch_e_step(X=X[idx, :], omega=omega[idx, :], features=features,
                                                   list_batches=list_batches)
             else:
-                sstats, tmp = self.__batch_e_step(X=X[idx, :], M=None, features=features, list_batches=list_batches)
+                sstats, tmp = self.__batch_e_step(X=X[idx, :], omega=None, features=features,
+                                                  list_batches=list_batches)
             del tmp
 
             # M-step
-            self.__m_step(sstats=sstats, num_samples=num_samples, learning_rate=learning_rate)
+            self.__m_step(sstats=sstats, learning_rate=learning_rate, num_samples=num_samples)
 
             end_epoch = time.time()
 
@@ -764,9 +737,10 @@ class diSparseCorrelatedBagPathway:
 
             # Compute approx bound
             if not self.collapse2ctm:
-                new_bound = self.perplexity(X=X[idx, :], M=M[idx, :], features=features, sstats=sstats)
+                new_bound = self.perplexity(X=X[idx, :], M=omega[idx, :], features=features, sstats=sstats)
             else:
                 new_bound = self.perplexity(X=X[idx, :], M=M, features=features, sstats=sstats)
+
             print('\t\t## Epoch {0} took {1} seconds...'.format(epoch, round(end_epoch - start_epoch, 3)))
             logger.info('\t\t## Epoch {0} took {1} seconds...'.format(epoch, round(end_epoch - start_epoch, 3)))
             data = str(epoch) + '\t' + str(round(end_epoch - start_epoch, 3)) + '\t' + str(new_bound) + '\n'
@@ -787,56 +761,55 @@ class diSparseCorrelatedBagPathway:
                         mu_file_name = model_name + '_mu_final.npz'
                         model_file_name = model_name + '_final.pkl'
 
-                    print('\t\t  --> Storing the SPREAT phi to: {0:s}'.format(phi_file_name))
-                    logger.info('\t\t  --> Storing the SPREAT phi to: {0:s}'.format(phi_file_name))
+                    print('\t\t  --> Storing the SOAP phi to: {0:s}'.format(phi_file_name))
+                    logger.info('\t\t  --> Storing the SOAP phi to: {0:s}'.format(phi_file_name))
                     np.savez(os.path.join(model_path, phi_file_name), self.phi)
 
-                    print('\t\t  --> Storing the SPREAT sigma to: {0:s}'.format(sigma_file_name))
-                    logger.info('\t\t  --> Storing the SPREAT sigma to: {0:s}'.format(sigma_file_name))
+                    print('\t\t  --> Storing the SOAP sigma to: {0:s}'.format(sigma_file_name))
+                    logger.info('\t\t  --> Storing the SOAP sigma to: {0:s}'.format(sigma_file_name))
                     np.savez(os.path.join(model_path, sigma_file_name), self.sigma)
 
-                    print('\t\t  --> Storing the SPREAT mu to: {0:s}'.format(mu_file_name))
-                    logger.info('\t\t  --> Storing the SPREAT mu to: {0:s}'.format(mu_file_name))
+                    print('\t\t  --> Storing the SOAP mu to: {0:s}'.format(mu_file_name))
+                    logger.info('\t\t  --> Storing the SOAP mu to: {0:s}'.format(mu_file_name))
                     np.savez(os.path.join(model_path, mu_file_name), self.mu)
 
-                    print('\t\t  --> Storing the SPREAT model to: {0:s}'.format(model_file_name))
-                    logger.info('\t\t  --> Storing the SPREAT model to: {0:s}'.format(model_file_name))
+                    print('\t\t  --> Storing the SOAP model to: {0:s}'.format(model_file_name))
+                    logger.info('\t\t  --> Storing the SOAP model to: {0:s}'.format(model_file_name))
                     save_data(data=copy.copy(self), file_name=model_file_name, save_path=model_path, mode="wb",
                               print_tag=False)
                     old_bound = new_bound
         print('\t  --> Training consumed %.2f mintues' % (round((time.time() - timeref) / 60., 3)))
         logger.info('\t  --> Training consumed %.2f mintues' % (round((time.time() - timeref) / 60., 3)))
 
-    def __transform(self, X, M=None, features=None):
+    def __transform(self, X, omega=None, features=None):
         num_samples = X.shape[0]
-        X = self.__check_non_neg_array(X, "diSparseCorrelatedBagPathway.fit")
+        X = self.__check_non_neg_array(X, "SparseCorrelatedBagPathway.fit")
         list_batches = np.arange(start=0, stop=num_samples, step=self.batch)
-        sstats, component_distribution = self.__batch_e_step(X=X, M=M, features=features, list_batches=list_batches,
-                                                             transform=True)
+        sstats, component_distribution = self.__batch_e_step(X=X, omega=omega, features=features,
+                                                             list_batches=list_batches, transform=True)
         return sstats, component_distribution
 
     def transform(self, X, M=None, features=None, batch_size=30, num_jobs=1):
         if not self.is_fit:
             raise Exception("This instance is not fitted yet. Call 'fit' with "
                             "appropriate arguments before using this method.")
-        M, features = self.__set_variables(X, M, features, batch_size, num_jobs)
-        _, component_distribution = self.__transform(X=X, M=M, features=features)
-        component_distribution = component_distribution
+        features, omega = self.__set_variables(X, M, features, batch_size, num_jobs)
+        _, component_distribution = self.__transform(X=X, omega=omega, features=features)
         return component_distribution
 
     def perplexity(self, X, M=None, features=None, log_space: bool = True, sstats=None, per_feature=True,
                    per_component=False, batch_size=30, num_jobs=1):
-        M, features = self.__set_variables(X, M, features, batch_size, num_jobs)
+        features, omega = self.__set_variables(X, M, features, batch_size, num_jobs)
         # collect properties from data
         num_samples = X.shape[0]
         num_features = np.sum(X)
         num_components = self.num_components
 
         if sstats is None:
-            sstats, _ = self.__transform(X=X, M=M, features=features)
+            sstats, _ = self.__transform(X=X, omega=omega, features=features)
 
         perplexity = self.__elbo(num_samples=num_samples, num_features=num_features,
-                                 M=M, omega_sstats=sstats["omega_sstats"],
+                                 omega_sstats=sstats["omega_sstats"],
                                  lambda_sstats=sstats["lambda_sstats"],
                                  o_sstats=sstats["o_sstats"])
 
@@ -855,14 +828,15 @@ class diSparseCorrelatedBagPathway:
 
     def score(self, X, M=None, features=None, log_space: bool = True, batch_size=30, num_jobs=1):
         """Calculate approximate log-likelihood as score."""
-        M, features = self.__set_variables(X, M, features, batch_size, num_jobs)
+        features, omega = self.__set_variables(X, M, features, batch_size, num_jobs)
+
         # collect properties from data
         num_samples = X.shape[0]
         num_features = np.sum(X)
 
-        sstats, _ = self.__transform(X=X, M=M, features=features)
+        sstats, _ = self.__transform(X=X, omega=omega, features=features)
         score = self.__elbo(num_samples=num_samples, num_features=num_features,
-                            M=M, omega_sstats=sstats["omega_sstats"],
+                            omega_sstats=sstats["omega_sstats"],
                             lambda_sstats=sstats["lambda_sstats"],
                             o_sstats=sstats["o_sstats"])
         if log_space:
@@ -899,9 +873,9 @@ class diSparseCorrelatedBagPathway:
         if not self.is_fit:
             raise Exception("This instance is not fitted yet. Call 'fit' with "
                             "appropriate arguments before using this method.")
-        M, features = self.__set_variables(X, M, features, batch_size, num_jobs)
+        features, omega = self.__set_variables(X, M, features, batch_size, num_jobs)
         minimum_probability = max(minimum_probability, 1e-8)  # never allow zero values in sparse output
-        sstats, component_distribution = self.__transform(X=X, M=M, features=features)
+        sstats, component_distribution = self.__transform(X=X, omega=omega, features=features)
         component_feature = sstats["o_sstats"]
         component_feature = csr_matrix(X).multiply(component_feature).toarray()
         component_feature[component_feature < minimum_probability] = 0
@@ -922,9 +896,9 @@ class diSparseCorrelatedBagPathway:
         if not self.is_fit:
             raise Exception("This instance is not fitted yet. Call 'fit' with "
                             "appropriate arguments before using this method.")
-        M, features = self.__set_variables(X, M, features, batch_size, num_jobs)
+        features, omega = self.__set_variables(X, M, features, batch_size, num_jobs)
         minimum_probability = max(minimum_probability, 1e-8)  # never allow zero values in sparse output
-        _, component_distribution = self.__transform(X=X, M=M, features=features)
+        _, component_distribution = self.__transform(X=X, omega=omega, features=features)
         component_distribution[component_distribution < minimum_probability] = 0.
         return component_distribution
 
@@ -934,10 +908,10 @@ class diSparseCorrelatedBagPathway:
             raise Exception("This instance is not fitted yet. Call 'fit' with "
                             "appropriate arguments before using this method.")
 
-        X = self.__check_non_neg_array(X, "diSparseCorrelatedBagPathway.fit")
-        M, features = self.__set_variables(X, M, features, batch_size, num_jobs)
+        X = self.__check_non_neg_array(X, "SparseCorrelatedBagPathway.fit")
+        features, omega = self.__set_variables(X, M, features, batch_size, num_jobs)
         num_samples = X.shape[0]
-        _, component_distribution = self.__transform(X=X, M=M, features=features)
+        _, component_distribution = self.__transform(X=X, omega=omega, features=features)
         score = 0
         # iterate over all samples
         for idx in np.arange(num_samples):
